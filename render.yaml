@@ -1,0 +1,22 @@
+# One-click deploy on Render (https://render.com): New > Blueprint > pick this repo.
+services:
+  - type: web
+    name: finance-one-stop
+    runtime: node
+    plan: starter            # a persistent disk needs a paid plan; free works but forgets the watchlist on redeploy
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: APP_PASSCODE
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DATA_DIR
+        value: /data
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
