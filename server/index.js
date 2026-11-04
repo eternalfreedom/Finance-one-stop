@@ -9,7 +9,7 @@ import { indexes, quotes, history } from './lib/quotes.js';
 import { refreshInsider, insiderOverview, trades as insiderTrades } from './lib/insider.js';
 import { superOverview, fundDetail, FUNDS } from './lib/superinvestors.js';
 import { refreshCongress, congressOverview } from './lib/congress.js';
-import { stocktwitsTrending, stocktwitsSymbol, reddit, REDDIT_FILTERS } from './lib/social.js';
+import { trending, stocktwitsSymbol, reddit, REDDIT_FILTERS } from './lib/social.js';
 import { headlines, tickerNews, REGIONS } from './lib/news.js';
 import { tickerMap, sectorFor, companyName } from './lib/sec.js';
 import * as store from './lib/store.js';
@@ -47,7 +47,7 @@ function every(ms, name, fn, sections = []) {
 every(5 * 60e3, 'insider', refreshInsider, ['insider:']);
 every(60 * 60e3, 'congress', refreshCongress, ['congress:overview']);
 every(6 * 3600e3, 'super', () => superOverview(), []);
-every(5 * 60e3, 'social', () => Promise.all([stocktwitsTrending(), reddit('all-stocks')]), []);
+every(5 * 60e3, 'social', () => Promise.all([trending(), reddit('all-stocks')]), []);
 every(5 * 60e3, 'news', () => headlines('for-you', store.getState().watchlist), []);
 
 // push prices every 15s while someone has the app open
@@ -133,7 +133,10 @@ route('GET', '/api/super', async () => superOverview());
 route('GET', '/api/super/fund/:cik', async (req, res, p) => (await fundDetail(p.cik)) || [404, { error: 'not found' }]);
 route('GET', '/api/congress', async () => congressOverview());
 route('GET', '/api/insider', async () => insiderOverview());
-route('GET', '/api/social/stocktwits', async () => ({ trending: await stocktwitsTrending() }));
+route('GET', '/api/social/stocktwits', async () => {
+  const t = await trending();
+  return { trending: t.items, source: t.source, notice: t.notice || null };
+});
 route('GET', '/api/social/reddit', async (req, res, p, b, q) => ({ ...(await reddit(q.get('filter') || 'all-stocks')), filters: REDDIT_FILTERS }));
 route('GET', '/api/social/symbol/:sym', async (req, res, p) => stocktwitsSymbol(p.sym));
 route('GET', '/api/news', async (req, res, p, b, q) => ({
@@ -147,7 +150,7 @@ route('GET', '/api/ticker/:sym', async (req, res, p, b, q) => {
   const [qt, hist, news, social, sector, name, sup, cong] = await Promise.all([
     quotes([sym]).then((x) => x[sym] || null),
     history(sym, range).catch(() => []),
-    tickerNews(sym).catch(() => []),
+    companyName(sym).then((n) => tickerNews(sym, n)).catch(() => []),
     stocktwitsSymbol(sym).catch(() => null),
     sectorFor(sym),
     companyName(sym),
@@ -231,7 +234,7 @@ route('POST', '/api/reports', async (req, res, p, body) => {
   } else {
     const [idx, st, rd, ins, cong, sup, news] = await Promise.all([
       settle(indexes()),
-      settle(stocktwitsTrending()),
+      settle(trending().then((t) => t.items)),
       settle(reddit('all-stocks')),
       settle(insiderOverview()),
       settle(congressOverview()),

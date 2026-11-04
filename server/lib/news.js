@@ -76,11 +76,22 @@ export async function headlines(region = 'for-you', watchlist = []) {
   return tagTickers(items, watchlist);
 }
 
-export async function tickerNews(t) {
+export async function tickerNews(t, name = '') {
   t = t.toUpperCase();
   const clean = t.replace(/^\^/, '');
-  const items = await feed(g(`"${clean}" stock when:7d`)).catch(() =>
+  const short = String(name)
+    .replace(/&amp;/g, '&')
+    .replace(/\b(inc|corp|corporation|co|ltd|plc|holdings?|class [a-c]|the|etf|trust)\b\.?/gi, '')
+    .replace(/[^A-Za-z0-9& .-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const q = short ? `"${short}" OR "${clean}" stock when:7d` : `"${clean}" stock when:7d`;
+  let items = await feed(g(q)).catch(() =>
     feed(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(t)}&region=US&lang=en-US`),
   );
+  // keep headlines that actually mention the company or ticker
+  const word = short.split(' ')[0]?.toLowerCase();
+  const relevant = items.filter((i) => i.title.includes(clean) || (word && word.length > 2 && i.title.toLowerCase().includes(word)));
+  if (relevant.length) items = relevant;
   return items.sort((a, b) => b.at - a.at).map((i) => ({ ...i, ticker: t }));
 }

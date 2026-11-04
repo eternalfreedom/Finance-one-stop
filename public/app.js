@@ -250,6 +250,10 @@ document.addEventListener('change', (e) => {
   if (el) ACTIONS[el.dataset.change]?.({ ...el.dataset, value: el.value }, el);
 });
 ACTIONS.ui = (d) => setUI(d.key, d.val);
+ACTIONS.retryView = () => {
+  cache.clear();
+  render();
+};
 ACTIONS.uiSelect = (d) => setUI(d.key, d.value);
 ACTIONS.watch = (d) => toggleWatch(d.t);
 ACTIONS.go = (d) => (location.hash = d.href);
@@ -387,7 +391,13 @@ VIEWS.explore = async (r, o) => {
   if (r[0] !== tab) history.replaceState(null, '', `#/explore/${tab}`);
   S.ui.exploreTab = tab;
   saveUI();
-  const html = await EXPLORE[tab](o);
+  let html;
+  try {
+    html = await EXPLORE[tab](o);
+  } catch (e) {
+    if (e.message === 'auth') throw e;
+    html = `<div class="empty">This tab's data source is unavailable right now (${esc(e.message)}).<br>It retries automatically every few minutes — the other tabs still work.<br><br><button class="btn" data-act="retryView">${icon('refresh', 'sm')} Retry now</button></div>`;
+  }
   setTabs(EXPLORE_TABS, tab, 'explore');
   return html;
 };
@@ -587,7 +597,7 @@ function treemap(items) {
 // --- Socials
 EXPLORE.social = async (o) => {
   const src = ui('socialSrc', 'stocktwits');
-  const head = seg('socialSrc', src, [['stocktwits', 'StockTwits'], ['reddit', 'Reddit']]);
+  const head = seg('socialSrc', src, [['stocktwits', 'Trending'], ['reddit', 'Reddit']]);
   if (src === 'stocktwits') {
     const d = await load('/api/social/stocktwits', o);
     const q = (ui('stQ', '') || '').toUpperCase();
@@ -595,19 +605,20 @@ EXPLORE.social = async (o) => {
     return `${head}
     <label class="search">${icon('search')}<input value="${esc(ui('stQ', ''))}" placeholder="Search tickers" data-change="uiSelect" data-key="stQ"></label>
     <div class="section">
-      ${secHead('fire', 'Top Trending on StockTwits', seeAll('stAll'), 'The biggest movers on the StockTwits trending board, with why they’re trending.')}
+      ${d.source === 'stocktwits' ? secHead('fire', 'Top Trending on StockTwits', seeAll('stAll'), 'The biggest movers on the StockTwits trending board, with why they’re trending.') : secHead('fire', 'Top Trending on Reddit', seeAll('stAll'), 'Biggest jumps in Reddit mentions in the last 24 hours, with the latest headline on each.')}
+      ${d.notice ? `<p class="updated" style="margin:-8px 0 14px">${esc(d.notice)}</p>` : ''}
       <div class="grid two" style="gap:14px">${list
         .slice(0, ui('stAll', false) ? 20 : 6)
         .map(
-          (s) => `<div class="card pad"><a class="trade-head" href="${tickerLink(s.symbol)}">${logo(s.symbol, '', s.logo)}<div class="main"><div class="tk">${esc(s.symbol)}</div><div class="nm">${esc(s.title)}</div></div><div style="text-align:right"><div class="up big">#${s.rank || '—'}</div><div class="label" style="letter-spacing:.04em;text-transform:none;font-weight:500">trending · ${num(s.watchers)} watchers</div></div></a>
-          <p class="note" style="color:var(--text);opacity:.85">${esc(s.summary || 'No summary yet.')}</p>
-          ${sbar(s.bullish, s.bearish)}
-          <div class="slegend"><span class="up">${s.bullish != null ? Math.round(s.bullish * 100) + '% bullish' : 'sentiment n/a'}</span><span class="muted">${s.sample ? s.sample + ' recent posts' : ''}</span><span class="down">${s.bearish != null ? Math.round(s.bearish * 100) + '% bearish' : ''}</span></div>
+          (s) => `<div class="card pad"><a class="trade-head" href="${tickerLink(s.symbol)}">${logo(s.symbol, '', s.logo)}<div class="main"><div class="tk">${esc(s.symbol)}</div><div class="nm">${esc(s.title)}</div></div><div style="text-align:right">${s.delta != null ? `<div class="up big">${pct(s.delta, 0)}</div><div class="label" style="letter-spacing:.04em;text-transform:none;font-weight:500">${num(s.mentions)} mentions · 24h</div>` : `<div class="up big">#${s.rank || '—'}</div><div class="label" style="letter-spacing:.04em;text-transform:none;font-weight:500">trending · ${num(s.watchers)} watchers</div>`}</div></a>
+          <p class="note" style="color:var(--text);opacity:.85">${s.link ? `<a href="${esc(s.link)}" target="_blank" rel="noopener">${esc(s.summary)}</a>` : esc(s.summary || 'No summary yet.')}</p>
+          ${s.bullish == null && s.delta != null ? '' : `${sbar(s.bullish, s.bearish)}
+          <div class="slegend"><span class="up">${s.bullish != null ? Math.round(s.bullish * 100) + '% bullish' : 'sentiment n/a'}</span><span class="muted">${s.sample ? s.sample + ' recent posts' : ''}</span><span class="down">${s.bearish != null ? Math.round(s.bearish * 100) + '% bearish' : ''}</span></div>`}
           <div style="display:flex;gap:10px;margin-top:14px"><a class="btn block" href="${tickerLink(s.symbol)}">Details ${icon('chevron', 'sm')}</a><button class="btn block primary" data-act="analyze" data-t="${esc(s.symbol)}">${icon('sparkle', 'sm')} Full analysis</button></div></div>`,
         )
         .join('') || '<div class="empty">No trending symbols.</div>'}</div>
     </div>
-    <p class="foot">Source: StockTwits public API. Sentiment = share of recent posts tagged bullish/bearish by their authors; untagged posts count as neutral.</p>`;
+    <p class="foot">${d.source === 'stocktwits' ? 'Source: StockTwits public API. Sentiment = share of recent posts tagged bullish/bearish by their authors; untagged posts count as neutral.' : 'Source: ApeWisdom (Reddit mention counts) and Google News headlines. Mentions are not recommendations.'}</p>`;
   }
   const filter = ui('redditFilter', 'all-stocks');
   const d = await load('/api/social/reddit?filter=' + filter, o);
