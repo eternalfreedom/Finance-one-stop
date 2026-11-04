@@ -16,6 +16,8 @@ services:
         sync: false
       - key: DATA_DIR
         value: /data
+      - key: NODE_VERSION
+        value: "22"
     disk:
       name: data
       mountPath: /data
