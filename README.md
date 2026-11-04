@@ -22,6 +22,22 @@ A personal, real-time market explorer. It runs as one small Node server that col
 
 Requires Node.js 22 or newer.
 
+**Windows, first time only:** install Node.js, then **close and reopen PowerShell** so it can find `npm`:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+# (or download the LTS installer from https://nodejs.org)
+node -v        # should print v22 or higher
+```
+
+If PowerShell then says *"running scripts is disabled on this system"*, run this once and try again:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Edit your settings with `notepad .env` (on Windows `cp` works in PowerShell; in Command Prompt use `copy .env.example .env`).
+
 ```bash
 git clone https://github.com/eternalfreedom/Finance-one-stop.git
 cd Finance-one-stop
