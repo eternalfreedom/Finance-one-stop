@@ -108,7 +108,9 @@ function art(seed) {
     const x = 10 + i * 21, hh = 30 + ((Math.abs(hash(seed + i)) % 70));
     return `<rect x='${x}' y='${140 - hh}' width='14' height='${hh}' fill='hsl(${h2},40%,${18 + (i % 3) * 6}%)' opacity='.85'/>`;
   }).join('')}<circle cx='${40 + (Math.abs(hash(seed)) % 120)}' cy='38' r='18' fill='hsl(${h},90%,92%)' opacity='.7'/></svg>`;
-  return `background-image:url("data:image/svg+xml,${svg.replace(/"/g, "'").replace(/#/g, '%23')}")`;
+  // fully URL-encoded and unquoted, so it is safe inside a style="..." attribute
+  const enc = encodeURIComponent(svg.replace(/%23/g, '#')).replace(/[()']/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `background-image:url(data:image/svg+xml,${enc})`;
 }
 
 // ---------------- API ----------------
@@ -174,7 +176,7 @@ async function toggleWatch(t) {
 
 // ---------------- nav ----------------
 const NAV = [
-  { id: 'markets', label: 'Markets', icon: 'markets' },
+  { id: 'markets', label: 'Dashboard', icon: 'markets' },
   { id: 'watchlist', label: 'Watchlist', icon: 'watch' },
   { id: 'explore', label: 'Explore', icon: 'explore' },
   { id: 'ideas', label: 'Ideas', icon: 'ideas' },
@@ -259,9 +261,20 @@ ACTIONS.watch = (d) => toggleWatch(d.t);
 ACTIONS.go = (d) => (location.hash = d.href);
 ACTIONS.expand = (d) => setUI(d.key, !ui(d.key, false));
 
+const postRender = [];
 function afterRender() {
   // live price spans
   document.querySelectorAll('[data-q]').forEach((el) => paintQuote(el));
+  while (postRender.length) postRender.shift()();
+  // fetch prices for any ticker chips we don't have yet
+  const missing = [...new Set([...document.querySelectorAll('[data-q]')].map((el) => el.dataset.q))].filter((t) => !S.quotes[t]);
+  if (missing.length)
+    api('/api/quotes?symbols=' + encodeURIComponent(missing.slice(0, 60).join(',')))
+      .then((q) => {
+        Object.assign(S.quotes, q);
+        document.querySelectorAll('[data-q]').forEach(paintQuote);
+      })
+      .catch(() => {});
 }
 function paintQuote(el) {
   const q = S.quotes[el.dataset.q];
@@ -270,6 +283,9 @@ function paintQuote(el) {
   if (el.dataset.f === 'chg') {
     el.textContent = pct(q.changePct, 2);
     el.className = cls(q.changePct) + ' num';
+  }
+  if (el.dataset.f === 'chip') {
+    el.innerHTML = `<span class="num">${q.price >= 1000 ? Math.round(q.price).toLocaleString() : '$' + price(q.price)}</span> <span class="${cls(q.changePct)} num">${pct(q.changePct, 2)}</span>`;
   }
 }
 
@@ -304,19 +320,92 @@ const sparkline = (pts, up) => {
 const VIEWS = {};
 
 // Markets home
+const CAT_COLORS = { Markets: '#22a6c9', Economy: '#e5b800', Earnings: '#34c759', Company: '#8e9bb5', Deals: '#5aa0ff', Policy: '#c58af9', Commodities: '#ff9f43', Crypto: '#f7b500' };
+const SYMBOL_LABELS = { 'CL=F': 'Crude', 'GC=F': 'Gold', 'BTC-USD': 'Bitcoin', '^N225': 'Nikkei', '^HSI': 'Hang Seng', '^GSPC': 'S&P 500', '^VIX': 'VIX', '^TNX': '10Y' };
+const symLabel = (t) => SYMBOL_LABELS[t] || t;
+const gauge = (v, color) => `<div class="gauge"><i style="width:${Math.max(2, Math.min(100, v))}%;background:repeating-linear-gradient(90deg, ${color} 0 2px, transparent 2px 5px)"></i></div>`;
+const fgColor = (v) => (v < 25 ? 'var(--red)' : v < 45 ? '#ff8a3d' : v <= 55 ? 'var(--yellow)' : v <= 75 ? '#8bd450' : 'var(--green)');
+const valColor = (l) => ({ Bargain: 'var(--green)', Fair: '#8bd450', Elevated: 'var(--yellow)', Expensive: '#ff8a3d', Extreme: 'var(--red)' })[l] || 'var(--muted)';
+const shortDay = (ymd) => new Date(ymd + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+function snapshotCard(d) {
+  const s = d.snapshot || {};
+  const fg = d.fearGreed || {};
+  const v = d.valuation || {};
+  const dot = { open: 'var(--green)', pre: '#ff9f43', post: '#ff9f43', closed: 'var(--dim)' }[s.status?.state] || 'var(--dim)';
+  const fgOpen = ui('fgOpen', false);
+  return `<div class="card glow pad">
+    <div class="card-title"><span>Market Snapshot</span><a href="#/headlines/us" aria-label="Headlines">${icon('ext', 'sm')}</a></div>
+    <div class="muted" style="font-size:14px;margin:4px 0 10px"><span class="sdot" style="background:${dot}"></span>${esc(s.status?.label || '')} · Updated ${s.updatedAt ? ago(s.updatedAt) : '—'}</div>
+    <h3 class="snap-h">${esc(s.headline || 'Loading…')}</h3>
+    <p class="snap-p">${esc(s.summary || '')}</p>
+    ${fg.score != null ? `<button class="meter-head" data-act="expand" data-key="fgOpen"><span class="card-sub">Fear &amp; Greed Index</span><span><b class="num">${fg.score}</b> <b style="color:${fgColor(fg.score)}">${esc(fg.label.toUpperCase())}</b></span></button>
+    ${gauge(fg.score, fgColor(fg.score))}<div class="gauge-ends"><span>Fear</span><span class="dim" style="font-size:12px">${fg.weekAgo != null ? `1 week ago ${fg.weekAgo} · 1 month ago ${fg.monthAgo}` : ''}</span><span>Greed</span></div>
+    ${fgOpen ? `<div class="fg-parts">${fg.components.map((c) => `<div><span>${esc(c.label)}</span><span style="color:${fgColor(c.score)}">${esc(c.rating)}</span></div>`).join('')}<p class="updated">${esc(fg.method)} Computed from Yahoo Finance prices.</p></div>` : ''}` : ''}
+    ${v.cape ? `<div class="meter-head"><span class="card-sub">Valuation (Shiller CAPE)</span><span><b class="num">${v.cape.toFixed(1)}</b> <b style="color:${valColor(v.label)}">${esc(v.label.toUpperCase())}</b></span></div>
+    ${gauge(v.percentile, valColor(v.label))}<div class="gauge-ends"><span>Bargain</span><span class="dim" style="font-size:12px">${v.percentile}th percentile since 1881 · avg ${v.mean}</span><span>Extreme</span></div>` : ''}
+    <div class="tiles">${(s.tiles || []).map((t) => `<a href="${tickerLink(t.symbol)}"><div class="muted">${esc(symLabel(t.symbol))}${t.symbol === 'SPY' && s.status?.state !== 'open' ? ` <span class="dim" style="font-size:12px">${esc(s.status?.label || '')}</span>` : ''}</div><div><b class="num" data-q="${esc(t.symbol)}" data-f="price">${price(t.price)}</b> <span class="${cls(t.changePct)} num" data-q="${esc(t.symbol)}" data-f="chg">${pct(t.changePct, 2)}</span></div></a>`).join('')}</div>
+    ${s.bullets?.length ? `<div class="card-sub" style="margin-top:18px">Market Summary</div><ul class="bullets">${s.bullets.map((b) => `<li><span class="bdot" style="background:${CAT_COLORS[b.category] || 'var(--accent)'}"></span><a href="${esc(b.link)}" target="_blank" rel="noopener">${esc(b.title)}</a></li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+function eventsCard(d) {
+  const u = d.upcoming || {};
+  if (u.error) return `<div class="card pad"><div class="card-title"><span>Upcoming Events</span></div><div class="empty">${esc(u.error)}</div></div>`;
+  return `<div class="card glow pad">
+    <div class="card-title"><span>Upcoming Events</span></div>
+    ${u.notable?.length ? `<div class="card-sub">Notable</div><ul class="bullets">${u.notable.map((n) => `<li><span class="bdot" style="background:var(--yellow)"></span>${esc(n)}</li>`).join('')}</ul>` : ''}
+    <div class="ev-cols">
+      <div><div class="card-sub">Earnings</div><div class="timeline">${(u.earnings || [])
+        .filter((e) => e.count)
+        .map((e) => `<button class="tl-item" data-act="earnDay" data-day="${e.day}"><div class="tl-day">${shortDay(e.day)}</div><div class="logo-row">${e.companies.slice(0, 3).map((c) => logo(c.symbol, 'xs')).join('')}${e.count > 3 ? `<span class="more-chip">+${e.count - 3}</span>` : ''}</div></button>`)
+        .join('') || '<div class="dim">No earnings data.</div>'}</div></div>
+      <div><div class="card-sub">Economic</div><div class="timeline">${(u.econ || [])
+        .filter((e) => e.events.length || e.fedSpeakers || e.holiday)
+        .map((e) => `<div class="tl-item"><div class="tl-day">${shortDay(e.day)}</div>${e.holiday ? `<div class="ev">${esc(e.holiday)}</div>` : ''}${e.events.map((x) => `<div class="ev" title="${x.forecast ? 'Forecast ' + esc(x.forecast) + ' · ' : ''}${x.previous ? 'Previous ' + esc(x.previous) : ''}"><span class="imp ${x.impact.toLowerCase()}"></span>${esc(x.title)}${x.forecast ? ` <span class="dim">f ${esc(x.forecast)}</span>` : ''}</div>`).join('')}${e.fedSpeakers ? `<div class="ev dim">Fed speakers (${e.fedSpeakers})</div>` : ''}</div>`)
+        .join('')}</div></div>
+    </div>
+    <div class="updated">Economic: ForexFactory calendar (US, ● high ● medium impact). Earnings: Nasdaq, largest companies first.</div>
+  </div>`;
+}
+ACTIONS.earnDay = (dd) => {
+  const day = (S.dash?.upcoming?.earnings || []).find((e) => e.day === dd.day);
+  if (!day) return;
+  openSheet(`<h3>Earnings · ${shortDay(day.day)}</h3><p class="muted" style="margin-top:-6px">${day.count} companies report. Largest first.</p><div class="list-card">${day.companies
+    .map((c) => `<a class="row" href="${tickerLink(c.symbol)}" onclick="document.getElementById('sheetBackdrop').click()">${logo(c.symbol, 'sm')}<div class="main"><div class="t1" style="font-size:16px">${esc(c.symbol)}</div><div class="t3">${esc(c.name)}</div></div><div class="right"><div style="font-size:13px">${esc(c.time)}</div><div class="t3">${c.cap ? money(c.cap, 0) + ' cap' : ''}${c.eps ? ' · EPS est ' + esc(c.eps) : ''}</div></div></a>`)
+    .join('')}</div>`);
+};
+
+function trendsCard(d) {
+  const t = d.trends || {};
+  if (t.error || !t.mid) return '';
+  const col = (title, span, rows) => `<div class="trend-col"><div class="trend-h"><b>${title}</b><span class="muted">${span}</span></div>${rows
+    .map((r) => `<div class="trend-row"><span class="${r.up ? 'up' : 'down'}">${r.up ? '▲' : '▼'}</span><div><div>${esc(r.text)}</div><div class="dim" style="font-size:12px">${esc(r.detail)}</div></div></div>`)
+    .join('')}</div>`;
+  return `<div class="card glow pad"><div class="card-title"><span>Market Trends</span><a href="#/explore/super" aria-label="Fund flows">${icon('ext', 'sm')}</a></div>
+    <div class="trend-cols">${col('Mid-Term', '1-3 mo', t.mid)}${col('Long-Term', '6-12 mo', t.long)}</div>
+    <div class="updated">From sector ETF returns, Treasury yields, tracked-fund 13F sector shifts and congressional flows.</div></div>`;
+}
+
 VIEWS.markets = async (_, o) => {
-  $('#pageTitle').textContent = 'Markets';
-  const [m, st, ins, cong] = await Promise.all([
+  $('#pageTitle').textContent = 'Dashboard';
+  const [m, dash, st, ins, cong] = await Promise.all([
     load('/api/market', o),
+    load('/api/dashboard', o).catch(() => ({})),
     load('/api/social/stocktwits', o).catch(() => null),
     load('/api/insider', o).catch(() => null),
     load('/api/congress', o).catch(() => null),
   ]);
+  S.dash = dash;
   S.indexes = m.indexes;
   Object.assign(S.quotes, m.quotes);
   paintTape();
   const idx = m.indexes.filter((i) => i.price != null);
   return `
+  <div class="grid two" style="gap:16px 24px;margin-bottom:24px">
+    <div style="display:grid;gap:16px;align-content:start">${snapshotCard(dash)}${trendsCard(dash)}</div>
+    <div style="display:grid;gap:16px;align-content:start">${eventsCard(dash)}</div>
+  </div>
   <div class="grid two">
     <div class="section">
       ${secHead('chart', 'Market Pulse', null, 'Major indexes, rates and commodities — refreshes live while the app is open.')}
@@ -336,14 +425,14 @@ VIEWS.markets = async (_, o) => {
     </div>
   </div>
   <div class="grid three">
-    <div class="section">${secHead('fire', 'Trending on StockTwits', { href: '#/explore/social' })}
-      <div class="list-card">${(st?.trending || []).slice(0, 5).map((s) => `<a class="row" href="${tickerLink(s.symbol)}">${logo(s.symbol, 'sm', s.logo)}<div class="main"><div class="t1">${esc(s.symbol)}</div><div class="t3">${esc(s.title)}</div></div>${sbar(s.bullish, s.bearish, true)}</a>`).join('') || '<div class="empty">Loading…</div>'}</div></div>
+    <div class="section">${secHead('fire', 'Trending Now', { href: '#/explore/social' })}
+      <div class="list-card">${(st?.trending || []).slice(0, 5).map((s) => `<a class="row" href="${tickerLink(s.symbol)}">${logo(s.symbol, 'sm', s.logo)}<div class="main"><div class="t1">${esc(s.symbol)}</div><div class="t3">${esc(s.title)}</div></div>${s.bullish != null ? sbar(s.bullish, s.bearish, true) : `<span class="up" style="font-weight:700">${pct(s.delta, 0)}</span>`}</a>`).join('') || '<div class="empty">Loading…</div>'}</div></div>
     <div class="section">${secHead('users', 'Insider Cluster Buys', { href: '#/explore/insider' })}
       <div class="list-card">${(ins?.clusters || []).slice(0, 5).map((c) => `<a class="row" href="${tickerLink(c.ticker)}">${logo(c.ticker, 'sm')}<div class="main"><div class="t1">${esc(c.ticker)}</div><div class="t3">${esc(c.company)}</div></div><div class="right"><div class="up" style="font-weight:700">${c.count} insiders</div><div class="t3">${money(c.value)}</div></div></a>`).join('') || '<div class="empty">Collecting Form 4 filings…</div>'}</div></div>
     <div class="section">${secHead('bank', 'Congress Is Buying', { href: '#/explore/congress' })}
       <div class="list-card">${(cong?.windows?.['90d']?.buying || []).slice(0, 5).map((c) => `<a class="row" href="${tickerLink(c.ticker)}">${logo(c.ticker, 'sm')}<div class="main"><div class="t1">${esc(c.ticker)}</div><div class="t3">${esc(c.company)}</div></div><div class="right up" style="font-weight:700">${c.count} member${c.count > 1 ? 's' : ''}</div></a>`).join('') || '<div class="empty">Parsing disclosures…</div>'}</div></div>
   </div>
-  <p class="foot">Prices may be delayed. Disclosures lag the actual trades (Form 4: 2 business days, Congress: up to 45 days, 13F: up to 45 days after quarter end). Not investment advice.</p>`;
+  <p class="foot">Prices may be delayed. Fear &amp; Greed is computed by this app from market prices (CNN's index is not available to apps). Disclosures lag the actual trades. Not investment advice.</p>`;
 };
 
 function watchRows(editable = false) {
@@ -416,6 +505,17 @@ EXPLORE.super = async (o) => {
   const topTrades = [...trades].sort((a, b) => b.filed.localeCompare(a.filed) || Math.abs(b.deltaValue) - Math.abs(a.deltaValue)).slice(0, ui('superTradesAll', false) ? 40 : 3);
   const qLabel = (p) => (p ? `${p.slice(0, 4)} Q${Math.ceil(Number(p.slice(5, 7)) / 3)}` : '');
   const topAum = [...d.funds].sort((a, b) => b.aum - a.aum);
+  postRender.push(() =>
+    load('/api/super/sectors')
+      .then((h) => {
+        const el = document.getElementById('sectorHist');
+        if (el) el.innerHTML = sectorHistoryChart(h);
+      })
+      .catch((e) => {
+        const el = document.getElementById('sectorHist');
+        if (el) el.innerHTML = `<div class="empty">Sector history unavailable (${esc(e.message)}).</div>`;
+      }),
+  );
   return `
   <label class="search">${icon('search')}<input value="${esc(ui('superQ', ''))}" placeholder="Search super investors…" data-change="uiSelect" data-key="superQ"></label>
   <div class="grid two">
@@ -458,8 +558,10 @@ EXPLORE.super = async (o) => {
   </div>
   </div>
   <div class="section">
-    ${secHead('pie', 'Sector Capital Concentration', null, `How each tracked fund allocates its top 25 holdings across sectors (${qLabel(d.period)}).`)}
-    ${sectorStacks(d)}
+    ${secHead('pie', 'Sector Capital Concentration', null, 'How tracked funds allocate capital across sectors over time (top 25 holdings of each fund, averaged across funds).')}
+    <div id="sectorHist"><div class="skeleton" style="height:260px"></div><p class="updated">Loading 8 quarters of 13F filings — the first load can take a few minutes.</p></div>
+    <div class="sec-head" style="margin-top:18px"><h2 style="font-size:18px">By fund · ${qLabel(d.period)}</h2><a class="more" href="#" data-act="expand" data-key="byFund">${ui('byFund', false) ? 'Hide' : 'Show'} ${icon('chevron', 'sm')}</a></div>
+    ${ui('byFund', false) ? sectorStacks(d) : ''}
   </div>
   <p class="foot">Source: SEC EDGAR Form 13F-HR. 13F filings are due 45 days after quarter end and only include US-listed long positions.</p>`;
 };
@@ -470,6 +572,36 @@ function fundTradeCard(t) {
   return `<div class="trade"><a class="trade-head" href="${t.ticker ? tickerLink(t.ticker) : '#/fund/' + t.cik}">${logo(tk)}<div class="main"><div class="tk">${esc(tk)} <span class="pill ${typeCls}">${icon(ic, 'sm')}${t.type}</span></div><div class="nm">${esc(t.name)}</div></div>${icon('chevron', 'sm')}</a>
   <div class="kv"><div><div class="label">Investor</div><div class="v"><a href="#/fund/${t.cik}">${esc(t.fund)}</a></div></div><div><div class="label">Est. value</div><div class="v big ${t.deltaValue >= 0 ? 'up' : 'down'}">${money(Math.abs(t.deltaValue))}</div></div>
   <div><div class="label">Avg price</div><div class="v">$${price(t.avgPrice)}</div></div><div><div class="label">Disclosed</div><div class="v">${dateFmt(t.filed)}</div></div></div></div>`;
+}
+const SECTOR_ORDER = ['Financial Services', 'Technology', 'Industrials', 'Healthcare', 'Communication Services', 'Consumer Defensive', 'Consumer Cyclical', 'Energy', 'Basic Materials', 'Real Estate', 'Utilities', 'Other'];
+function sectorHistoryChart(h) {
+  const ps = h.periods || [];
+  if (!ps.length) return '<div class="empty">No history yet.</div>';
+  const sel = Math.min(ui('secQ', ps.length - 1), ps.length - 1);
+  const W = 640, H = 300, L = 40, B = 46, T = 10, bw = (W - L) / ps.length;
+  let bars = '';
+  ps.forEach((p, i) => {
+    let y = T;
+    // top of the stack first (Financials at the top, Other at the bottom)
+    for (const s of SECTOR_ORDER) {
+      const v = (p.mix[s] || 0) * (H - B - T);
+      if (v > 0.2) bars += `<rect x="${L + i * bw + 3}" y="${y.toFixed(1)}" width="${bw - 6}" height="${v.toFixed(1)}" fill="${SECTOR_COLORS[s]}" opacity="${i === sel ? 1 : 0.8}"/>`;
+      y += v;
+    }
+    bars += `<rect x="${L + i * bw}" y="0" width="${bw}" height="${H}" fill="transparent" data-act="ui" data-key="secQ" data-val="${i}" style="cursor:pointer"/>`;
+    bars += `<text x="${L + i * bw + bw / 2}" y="${H - B + 16}" text-anchor="end" transform="rotate(-40 ${L + i * bw + bw / 2} ${H - B + 16})" ${i === sel ? 'style="fill:#f3f3f4;font-weight:700"' : ''}>${esc(p.label)}</text>`;
+  });
+  const grid = [0, 20, 40, 60, 80, 100].map((g) => `<text x="${L - 6}" y="${T + (H - B - T) * (1 - g / 100) + 4}" text-anchor="end">${g}%</text>`).join('');
+  const cur = ps[sel];
+  return `<div class="sector-chart"><svg class="chart" viewBox="0 0 ${W} ${H}">${grid}${bars}</svg></div>
+  <div class="legend-h">${esc(cur.label)} <span class="dim" style="font-size:13px;font-weight:500">· ${cur.funds} funds · tap a bar to change quarter</span></div>
+  <div class="legend">${SECTOR_ORDER.filter((s) => cur.mix[s] > 0.0005)
+    .map((s) => {
+      const prev = ps[sel - 1]?.mix[s];
+      const dlt = prev != null ? (cur.mix[s] - prev) * 100 : null;
+      return `<div><span class="sw" style="background:${SECTOR_COLORS[s]}"></span>${esc(s)}</div><div class="num">${(cur.mix[s] * 100).toFixed(2)}%${dlt != null && Math.abs(dlt) >= 0.05 ? ` <span class="${dlt >= 0 ? 'up' : 'down'}" style="font-size:12px">${dlt >= 0 ? '+' : ''}${dlt.toFixed(1)}</span>` : ''}</div>`;
+    })
+    .join('')}</div>`;
 }
 function sectorStacks(d) {
   const legendSectors = [...d.sectors, 'Other'];
@@ -828,15 +960,20 @@ const REGION_TABS = [
   { id: 'europe', label: 'Europe' },
   { id: 'crypto', label: 'Crypto' },
 ];
+function tickerChip(t) {
+  return `<a class="tchip" href="${tickerLink(t)}">${/^[A-Z.]{1,6}$/.test(t) ? logo(t, 'xs') : ''}<b>${esc(symLabel(t))}</b><span data-q="${esc(t)}" data-f="chip"></span></a>`;
+}
 VIEWS.headlines = async (r, o) => {
   $('#pageTitle').textContent = 'Top Headlines';
   const region = REGION_TABS.find((t) => t.id === r[0]) ? r[0] : 'for-you';
   const d = await load('/api/news?region=' + region, o);
   setTabs(REGION_TABS, region, 'headlines');
-  const chip = ui('newsChip', 'all');
+  const chipKey = 'newsChip:' + region;
+  const chip = ui(chipKey, 'all');
   let items = d.items;
-  if (chip === 'watchlist') items = items.filter((i) => i.watchlist || i.tickers?.length);
-  if (chip === 'important') items = items.filter((i) => i.important);
+  if (chip === 'watchlist') items = items.filter((i) => i.watchlist || i.tickers?.some((t) => S.watchlist.includes(t)));
+  else if (chip === 'important') items = items.filter((i) => i.important);
+  else if (chip !== 'all') items = items.filter((i) => i.category === chip);
   const groups = {};
   const today = new Date().toDateString(), yest = new Date(Date.now() - 864e5).toDateString();
   for (const it of items) {
@@ -844,14 +981,20 @@ VIEWS.headlines = async (r, o) => {
     const g = ds === today ? 'Today' : ds === yest ? 'Yesterday' : new Date(it.at).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
     (groups[g] ||= []).push(it);
   }
-  const chips = [['all', 'All'], ['watchlist', 'Watchlist'], ['important', 'Important']];
-  return `<div class="chips">${chips.map(([v, l]) => `<button class="chip ${chip === v ? 'on' : ''}" data-act="ui" data-key="newsChip" data-val="${v}">${l}</button>`).join('')}</div>
-  <div style="max-width:860px">${Object.entries(groups)
+  const counts = {};
+  d.items.forEach((i) => (counts[i.category] = (counts[i.category] || 0) + 1));
+  const chips = [['all', 'All'], ...(region === 'for-you' ? [['watchlist', 'Watchlist'], ['important', 'Important']] : []), ...(d.categories || []).filter((c) => counts[c]).map((c) => [c, c])];
+  return `<div class="chips">${chips.map(([v, l]) => `<button class="chip ${chip === v ? 'on' : ''}" data-act="ui" data-key="${chipKey}" data-val="${esc(v)}">${esc(l)}</button>`).join('')}</div>
+  <div class="news-wrap">${Object.entries(groups)
     .map(
       ([g, xs]) => `<div class="day">${esc(g)}</div>${xs
         .map((it) => {
-          const tag = it.watchlist ? '<span class="dot" style="background:var(--green)"></span><span class="up">Watchlist</span>' : it.important ? '<span class="dot" style="background:var(--yellow)"></span><span style="color:var(--yellow)">Important</span>' : '';
-          return `<div class="news"><div class="main"><div class="meta">${tag}${tag ? '<span class="dim">·</span>' : ''}<span class="muted" style="letter-spacing:0;text-transform:none;font-weight:500">${esc(it.source)} · ${new Date(it.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></div><a href="${esc(it.link)}" target="_blank" rel="noopener"><h3>${esc(it.title)}</h3></a>${it.summary ? `<div class="src">${esc(it.summary)}</div>` : ''}${(it.tickers || []).length ? `<div style="display:flex;gap:10px;margin-top:10px">${it.tickers.map((t) => `<a href="${tickerLink(t)}" style="display:flex;gap:8px;align-items:center;font-weight:800">${logo(t, 'sm')}${esc(t)}</a>`).join('')}</div>` : ''}</div>${it.image ? `<img class="thumb" src="${esc(it.image)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</div>`;
+          const tag = it.watchlist || it.tickers?.some((t) => S.watchlist.includes(t))
+            ? `<span class="dot" style="background:var(--green)"></span><span class="up">Watchlist</span>`
+            : it.important && region === 'for-you'
+              ? `<span class="dot" style="background:var(--yellow)"></span><span style="color:var(--yellow)">Important</span>`
+              : `<span style="color:${CAT_COLORS[it.category] || 'var(--muted)'}">${esc(it.category)}</span>`;
+          return `<div class="news"><div class="main"><div class="meta">${tag}<span class="dim">·</span><span class="muted" style="letter-spacing:0;text-transform:none;font-weight:500">${new Date(it.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></div><a href="${esc(it.link)}" target="_blank" rel="noopener"><h3>${esc(it.title)}</h3></a><div class="src">${esc(it.source)}</div>${(it.tickers || []).length ? `<div class="tchips">${it.tickers.map(tickerChip).join('')}</div>` : ''}</div><div class="thumb art" style="${art(it.title)}">${it.image ? `<img src="${esc(it.image)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</div></div>`;
         })
         .join('')}`,
     )
@@ -1047,7 +1190,7 @@ function showLogin() {
 }
 
 // ---------------- live updates ----------------
-const SECTION_VIEWS = { insider: ['explore/insider', 'markets'], congress: ['explore/congress', 'markets'], super: ['explore/super'], social: ['explore/social', 'markets'], news: ['headlines'] };
+const SECTION_VIEWS = { dashboard: ['markets'], sectors: ['explore/super'], insider: ['explore/insider', 'markets'], congress: ['explore/congress', 'markets'], super: ['explore/super'], social: ['explore/social', 'markets'], news: ['headlines'] };
 let es;
 function connectLive() {
   try {

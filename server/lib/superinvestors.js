@@ -44,7 +44,7 @@ async function listFilings(cik) {
   return Object.values(byPeriod).sort((a, b) => b.period.localeCompare(a.period));
 }
 
-async function loadHoldings(cik, f) {
+async function loadHoldings(cik, f, { trim = false } = {}) {
   if (store.filings[f.acc]) return store.filings[f.acc];
   const folder = `https://www.sec.gov/Archives/edgar/data/${cik}/${f.acc.replace(/-/g, '')}/`;
   const idx = await getJSON(folder + 'index.json');
@@ -78,7 +78,10 @@ async function loadHoldings(cik, f) {
   const median = implied[Math.floor(implied.length / 2)] || 0;
   const mult = f.period < '2022-12-31' || median < 0.5 ? 1000 : 1;
   const holdings = Object.values(pos).map((p) => ({ ...p, value: p.value * mult }));
-  const rec = { ...f, folder, holdings };
+  const total = holdings.reduce((a, h) => a + h.value, 0);
+  // Older quarters are only used for sector history: keep their 40 largest positions to save disk
+  const kept = trim ? [...holdings].sort((a, b) => b.value - a.value).slice(0, 40) : holdings;
+  const rec = { ...f, folder, total, trimmed: trim, holdings: kept };
   store.filings[f.acc] = rec;
   diskSave('13f.json', store);
   return rec;
@@ -200,4 +203,56 @@ export async function fundDetail(cik) {
   const f = all.funds.find((x) => String(x.cik) === String(cik));
   if (!f) return null;
   return { ...f, trades: all.trades.filter((t) => String(t.cik) === String(cik)) };
+}
+
+// Sector mix of tracked funds over the last 8 quarters (top 25 holdings of each fund, equal-weighted across funds)
+const qLabel = (p) => `${p.slice(0, 4)} Q${Math.ceil(Number(p.slice(5, 7)) / 3)}`;
+export async function sectorHistory() {
+  return cached('super:sectors', 24 * 3600e3, async () => {
+    const perFund = await pool(FUNDS, 2, async (fund) => {
+      const filings = (await listFilings(fund.cik)).slice(0, 8);
+      const out = [];
+      for (let i = 0; i < filings.length; i++) {
+        try {
+          const r = await loadHoldings(fund.cik, filings[i], { trim: i >= 2 });
+          const total = r.total || r.holdings.reduce((a, h) => a + h.value, 0);
+          out.push({ period: r.period, total, top: [...r.holdings].sort((a, b) => b.value - a.value).slice(0, 25) });
+        } catch {
+          /* skip a quarter we cannot read */
+        }
+      }
+      return out;
+    });
+    const names = {};
+    for (const f of perFund) for (const q of f || []) for (const h of q.top) names[h.cusip] = h.name;
+    const tick = await cusipsToTickers(Object.keys(names), names);
+    const periods = {};
+    for (const f of perFund) {
+      for (const q of f || []) {
+        const mix = Object.fromEntries([...SECTORS, 'Other'].map((s) => [s, 0]));
+        let covered = 0;
+        for (const h of q.top) {
+          const w = h.value / (q.total || 1);
+          covered += w;
+          const t = tick[h.cusip];
+          const sec = t ? await sectorFor(t) : null;
+          mix[sec || 'Other'] += w;
+        }
+        // normalise to the part of the portfolio we can see (top 25 positions)
+        for (const k of Object.keys(mix)) mix[k] = covered ? mix[k] / covered : 0;
+        (periods[q.period] ||= []).push(mix);
+      }
+    }
+    const fundCount = perFund.filter((f) => f?.length).length;
+    const list = Object.entries(periods)
+      .filter(([, mixes]) => mixes.length >= Math.max(3, fundCount * 0.6))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-8)
+      .map(([period, mixes]) => {
+        const avg = {};
+        for (const k of [...SECTORS, 'Other']) avg[k] = mixes.reduce((a, m) => a + m[k], 0) / mixes.length;
+        return { period, label: qLabel(period), funds: mixes.length, mix: avg };
+      });
+    return { periods: list, sectors: [...SECTORS, 'Other'] };
+  });
 }

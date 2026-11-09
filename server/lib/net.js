@@ -9,6 +9,9 @@ fs.mkdirSync(path.join(DATA_DIR, 'cache'), { recursive: true });
 // SEC asks automated clients to identify themselves with a contact address.
 // Set SEC_USER_AGENT="YourApp you@example.com" in your environment.
 export const UA = process.env.SEC_USER_AGENT || 'FinanceOneStop/1.0 (personal dashboard; set SEC_USER_AGENT)';
+// Every other site gets a generic name, so the contact address in SEC_USER_AGENT only goes to the SEC.
+const GENERIC_UA = 'FinanceOneStop/1.0 (personal dashboard)';
+const uaFor = (host) => (/(^|\.)sec\.gov$/.test(host) ? UA : GENERIC_UA);
 
 const hostGates = new Map();
 const HOST_RPS = { 'www.sec.gov': 6, 'data.sec.gov': 6, 'api.openfigi.com': 0.4, 'api.stocktwits.com': 2 };
@@ -32,7 +35,7 @@ export async function fetchRaw(url, opts = {}) {
     const res = await fetch(url, {
       method: opts.method || 'GET',
       body: opts.body,
-      headers: { 'User-Agent': UA, 'Accept-Encoding': 'gzip, deflate', ...(opts.headers || {}) },
+      headers: { 'User-Agent': uaFor(u.host), 'Accept-Encoding': 'gzip, deflate', ...(opts.headers || {}) },
       signal: ctrl.signal,
     });
     if (!res.ok) {

@@ -4,13 +4,13 @@ A personal, real-time market explorer. It runs as one small Node server that col
 
 | Area | What you get | Live source |
 | --- | --- | --- |
-| **Markets** | Index/rates/commodities tape, your watchlist with live prices, quick pulse of the other tabs | Yahoo Finance chart API (Finnhub fallback) |
-| **Explore → Super-Investors** | 21 well-known funds (Berkshire, Duquesne, Pershing, Appaloosa, Coatue…), top conviction plays (New / Added / Reduced / Exited), largest funds, latest notable trades, sector concentration per fund, fund detail pages | SEC EDGAR 13F-HR filings, OpenFIGI for CUSIP→ticker |
+| **Dashboard** | Market snapshot (one-line headline + summary of the day, pre/open/post status), Fear & Greed index (computed from six market signals, with 1-week/1-month comparison), valuation gauge (Shiller CAPE percentile since 1881), VIX/SPY/Bitcoin tiles, top-story summary; upcoming events (notable, earnings by day with logos, US economic calendar with forecasts); mid- and long-term market trends; index pulse and watchlist | Yahoo Finance, multpl.com, ForexFactory calendar, Nasdaq earnings calendar, SEC 13F, House PTRs |
+| **Explore → Super-Investors** | 21 well-known funds (Berkshire, Duquesne, Pershing, Appaloosa, Coatue…), top conviction plays (New / Added / Reduced / Exited), largest funds, latest notable trades, 8-quarter sector concentration chart plus per-fund mix, fund detail pages | SEC EDGAR 13F-HR filings, OpenFIGI for CUSIP→ticker |
 | **Explore → Congress** | Committee-conflict ("suspicious") trades, who beats the S&P 500, what Congress is buying (30d/90d/1y), sector flow treemap, first-time buys, latest disclosures, member pages with photos | House Clerk periodic transaction reports (PDFs parsed on the server), unitedstates/congress-legislators |
 | **Explore → Socials** | StockTwits trending with "why it's trending" and bull/bear sentiment; Reddit fastest risers and mention leaderboard per subreddit | StockTwits public API, ApeWisdom |
 | **Explore → Insider** | Cluster buys, buy-the-dip trades (≥15% under the 90-day peak), filterable recent Form 4 trades (buys/sells, CEO/CFO/director, $ size) | SEC EDGAR Form 4 (live feed plus a 10-day backfill) |
 | **Ideas** | Ask for a research report on any topic or ticker; Claude writes it from the app's live data plus web search. Save, read and delete across devices | Anthropic API (optional) |
-| **Headlines** | For You (includes your watchlist), US, China, Japan, Europe, Crypto; Watchlist / Important filters | MarketWatch, Google News, Yahoo Finance RSS |
+| **Headlines** | For You (includes your watchlist), US, China, Japan, Europe, Crypto; filter by Markets / Economy / Earnings / Company / Deals / Policy / Commodities / Crypto, plus Watchlist / Important; each story tagged with the companies it mentions and their live price | MarketWatch, Google News, Yahoo Finance RSS |
 | **Ticker pages** | Price chart (5D–5Y), social sentiment and posts, insider and Congress trades, tracked-fund holders, news, one-tap AI "full analysis" | all of the above |
 
 ### How "real time" works

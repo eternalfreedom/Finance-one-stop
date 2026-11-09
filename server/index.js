@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { health, invalidate } from './lib/net.js';
 import { indexes, quotes, history } from './lib/quotes.js';
 import { refreshInsider, insiderOverview, trades as insiderTrades } from './lib/insider.js';
-import { superOverview, fundDetail, FUNDS } from './lib/superinvestors.js';
+import { superOverview, fundDetail, sectorHistory, FUNDS } from './lib/superinvestors.js';
+import { snapshot, fearGreed, valuation, upcoming, trends, marketStatus } from './lib/dashboard.js';
 import { refreshCongress, congressOverview } from './lib/congress.js';
 import { trending, stocktwitsSymbol, reddit, REDDIT_FILTERS } from './lib/social.js';
-import { headlines, tickerNews, REGIONS } from './lib/news.js';
+import { headlines, tickerNews, REGIONS, CATEGORIES } from './lib/news.js';
 import { tickerMap, sectorFor, companyName } from './lib/sec.js';
 import * as store from './lib/store.js';
 import { requestReport, aiEnabled, onReportUpdate } from './lib/ai.js';
@@ -49,6 +50,11 @@ every(60 * 60e3, 'congress', refreshCongress, ['congress:overview']);
 every(6 * 3600e3, 'super', () => superOverview(), []);
 every(5 * 60e3, 'social', () => Promise.all([trending(), reddit('all-stocks')]), []);
 every(5 * 60e3, 'news', () => headlines('for-you', store.getState().watchlist), []);
+let lastSectors = null;
+every(12 * 3600e3, 'sectors', async () => {
+  lastSectors = await sectorHistory();
+}, ['dash:trends']);
+every(5 * 60e3, 'dashboard', () => Promise.all([snapshot(), fearGreed(), upcoming(), valuation()]), ['dash:snapshot']);
 
 // push prices every 15s while someone has the app open
 setInterval(async () => {
@@ -126,7 +132,23 @@ route('PUT', '/api/prefs', async (req, res, p, body) => {
   return store.getState();
 });
 
-route('GET', '/api/market', async () => ({ indexes: await indexes(), quotes: await quotes(store.getState().watchlist) }));
+route('GET', '/api/market', async () => ({ indexes: await indexes(), quotes: await quotes(store.getState().watchlist), status: marketStatus() }));
+route('GET', '/api/dashboard', async () => {
+  const settle = (p) => p.then((v) => v, (e) => ({ error: String(e.message || e) }));
+  const cong = await congressOverview().catch(() => null);
+  const [snap, fg, val, up, tr] = await Promise.all([
+    settle(snapshot()),
+    settle(fearGreed()),
+    settle(valuation()),
+    settle(upcoming()),
+    settle(trends({ sectorHistory: lastSectors, congressFlows: cong?.windows?.['365d']?.flows })),
+  ]);
+  return { snapshot: snap, fearGreed: fg, valuation: val, upcoming: up, trends: tr };
+});
+route('GET', '/api/super/sectors', async () => {
+  lastSectors = await sectorHistory();
+  return lastSectors;
+});
 route('GET', '/api/quotes', async (req, res, p, b, q) => quotes((q.get('symbols') || '').split(',').filter(Boolean)));
 
 route('GET', '/api/super', async () => superOverview());
@@ -141,6 +163,7 @@ route('GET', '/api/social/reddit', async (req, res, p, b, q) => ({ ...(await red
 route('GET', '/api/social/symbol/:sym', async (req, res, p) => stocktwitsSymbol(p.sym));
 route('GET', '/api/news', async (req, res, p, b, q) => ({
   regions: Object.fromEntries(Object.entries(REGIONS).map(([k, v]) => [k, v.label])),
+  categories: CATEGORIES,
   items: await headlines(q.get('region') || 'for-you', store.getState().watchlist),
 }));
 
